@@ -9,6 +9,7 @@ import Session from './pages/Session'
 import Journal from './pages/Journal'
 import Insights from './pages/Insights'
 import OnboardLayout from './pages/onboarding/OnboardLayout'
+import TestAuth from './pages/TestAuth'
 
 function PrivateRoute({ children }) {
   const { user } = useAuth()
@@ -26,7 +27,10 @@ export default function App() {
         <Route path='/session' element={<PrivateRoute><Session /></PrivateRoute>} />
         <Route path='/journal' element={<PrivateRoute><Journal /></PrivateRoute>} />
         <Route path='/insights' element={<PrivateRoute><Insights /></PrivateRoute>} />
+        <Route path="/test-auth" element={<TestAuth />} />
       </Routes>
     </CloneProvider></AuthProvider></BrowserRouter>
   )
 }
+
+
