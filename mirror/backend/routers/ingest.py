@@ -39,10 +39,23 @@ async def run_ingestion(job_id, user_id, file_text, source, user_name):
             "chunks_added": len(chunks), "completed_at": "now()"}).eq("id", job_id).execute()
         sb.table("profiles").update({"onboarding_step": 1}).eq("id", user_id).execute()
     except Exception as e:
-        sb.table("ingest_jobs").update({"status": "error", "error": str(e)}).eq("id", job_id).execute()
+        import traceback
+        print("INGEST ERROR:", e)
+        traceback.print_exc()
+
+        sb.table("ingest_jobs").update({
+            "status": "error",
+            "error": str(e)
+        }).eq("id", job_id).execute()
+    try:
+        uuid.UUID(user_id)
+    except:
+        raise ValueError("Invalid user_id (must be UUID)")
 
 @router.get("/status/{job_id}")
 async def ingest_status(job_id: str):
     sb = get_supabase()
     result = sb.table("ingest_jobs").select("*").eq("id", job_id).single().execute()
     return result.data
+
+
