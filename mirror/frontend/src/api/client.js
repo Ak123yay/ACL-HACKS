@@ -1,9 +1,20 @@
 import axios from 'axios'
 
 const rawApiUrl = (import.meta.env.VITE_API_URL || '').trim()
-const BASE = rawApiUrl
-  ? rawApiUrl.replace(/\/+$/, '').replace(/\/api$/, '')
-  : '/api'
+const normalizeApiBase = (url) => {
+  if (!url) return '/api'
+
+  let normalized = url.replace(/\/+$/, '').replace(/\/api$/, '')
+
+  // Prevent accidental relative-path API URLs in production (e.g. "my-api.up.railway.app").
+  if (!/^https?:\/\//i.test(normalized)) {
+    normalized = `https://${normalized}`
+  }
+
+  return normalized
+}
+
+const BASE = normalizeApiBase(rawApiUrl)
 
 if (!rawApiUrl && typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
   console.warn('[Mirror] VITE_API_URL is not set in Vercel; API requests may fail in production.')
