@@ -20,9 +20,19 @@ async def upload_file(background_tasks: BackgroundTasks,
         raise HTTPException(status_code=400, detail="Invalid user_id (must be UUID)")
 
     job_id = str(uuid.uuid4())
-    content = await file.read()
-    file_text = content.decode("utf-8", errors="ignore")
-    sb = get_supabase()
+    try:
+        content = await file.read()
+        file_text = content.decode("utf-8", errors="ignore")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}") from exc
+
+    try:
+        sb = get_supabase()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Supabase client initialization failed: {exc}",
+        ) from exc
 
     try:
         sb.table("ingest_jobs").insert({"id": job_id, "user_id": user_id,
@@ -41,8 +51,8 @@ async def upload_file(background_tasks: BackgroundTasks,
 
 
 async def run_ingestion(job_id, user_id, file_text, source, user_name):
-    sb = get_supabase()
     try:
+        sb = get_supabase()
         messages = parse_file(file_text, source, user_name)
         if not messages:
             raise ValueError("No messages found in file")
