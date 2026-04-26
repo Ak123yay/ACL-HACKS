@@ -68,13 +68,18 @@ async def clone_voice(
 
     try:
         sb = get_supabase()
-        sb.table("profiles").update({"voice_id": voice_id, "onboarding_step": 3})\
+        print("GOT SUPABASE CLIENT")
+        print("VOICE ID:", voice_id)
+        print("USER ID:", user_id)
+        result = sb.table("profiles").update({"voice_id": voice_id, "onboarding_step": 3})\
             .eq("id", user_id).execute()
+        print("SUPABASE RESULT:", result)
     except RuntimeError as exc:
+        print("SUPABASE RUNTIME ERROR:", exc)
         raise HTTPException(status_code=503, detail=str(exc))
-    except Exception:
+    except Exception as exc:
+        print("SUPABASE ERROR:", type(exc).__name__, exc)
         raise HTTPException(status_code=502, detail="Failed to persist voice clone in profile.")
-
     return {"voice_id": voice_id}
 
 
