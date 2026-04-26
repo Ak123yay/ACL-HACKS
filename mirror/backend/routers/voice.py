@@ -54,6 +54,8 @@ async def clone_voice(
         os.unlink(tmp_path)
 
     if response.status_code != 200:
+        print("SMALLEST STATUS:", response.status_code)
+        print("SMALLEST RESPONSE:", response.text)
         raise HTTPException(
             status_code=502,
             detail=f"Voice provider error ({response.status_code}): {response.text[:300]}",
