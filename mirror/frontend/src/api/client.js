@@ -1,6 +1,14 @@
 import axios from 'axios'
 
-const BASE = import.meta.env.VITE_API_URL || '/api'
+const rawApiUrl = (import.meta.env.VITE_API_URL || '').trim()
+const BASE = rawApiUrl
+  ? rawApiUrl.replace(/\/+$/, '').replace(/\/api$/, '')
+  : '/api'
+
+if (!rawApiUrl && typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
+  console.warn('[Mirror] VITE_API_URL is not set in Vercel; API requests may fail in production.')
+}
+
 const http = axios.create({ baseURL: BASE, headers: { 'Content-Type': 'application/json' } })
 
 http.interceptors.request.use(async (config) => {
