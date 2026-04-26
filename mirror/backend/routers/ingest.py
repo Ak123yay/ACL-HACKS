@@ -5,6 +5,7 @@ from config import get_supabase
 from services.parsers import parse_file
 from services.chunker import chunk_messages
 from services.embedder import embed_batch
+from services.chroma_client import add_documents
 from models import ReflectionRequest
 import uuid
 
@@ -68,7 +69,6 @@ async def run_ingestion(job_id, user_id, file_text, source, user_name):
         rows = [
             {
                 "content": chunk,
-                "embedding": embedding,
                 "metadata": {
                     "user_id": user_id,
                     "source": source,
@@ -77,7 +77,11 @@ async def run_ingestion(job_id, user_id, file_text, source, user_name):
             }
             for chunk, embedding in zip(chunks, embeddings)
         ]
-        sb.table("documents").insert(rows).execute()
+        add_documents(
+            documents=[row["content"] for row in rows],
+            embeddings=embeddings,
+            metadatas=[row["metadata"] for row in rows],
+        )
 
         sb.table("ingest_jobs").update({"status": "complete",
             "chunks_added": len(chunks), "completed_at": "now()"}).eq("id", job_id).execute()
@@ -118,7 +122,6 @@ async def save_reflections(req: ReflectionRequest):
     rows = [
         {
             "content": text,
-            "embedding": embedding,
             "metadata": {
                 "user_id": req.user_id,
                 "source": "reflection",
@@ -127,7 +130,11 @@ async def save_reflections(req: ReflectionRequest):
         }
         for text, embedding in zip(texts, embeddings)
     ]
-    sb.table("documents").insert(rows).execute()
+    add_documents(
+        documents=[row["content"] for row in rows],
+        embeddings=embeddings,
+        metadatas=[row["metadata"] for row in rows],
+    )
 
     sb.table("profiles").update({"onboarding_step": 2})\
         .eq("id", req.user_id).execute()
