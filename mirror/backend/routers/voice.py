@@ -1,30 +1,53 @@
 # backend/routers/voice.py
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from openai import APIConnectionError, APITimeoutError, BadRequestError, AuthenticationError
-from config import openai_client, get_supabase, ELEVENLABS_API_KEY
+from config import openai_client, get_supabase, SMALLEST_API_KEY
 import httpx, tempfile, os
 
 router = APIRouter()
-EL_BASE = "https://api.elevenlabs.io/v1"
-EL_HEADERS = {"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"}
+SMALLEST_BASE = "https://waves-api.smallest.ai/api/v1"
+SMALLEST_HEADERS = {
+    "Authorization": f"Bearer {SMALLEST_API_KEY}",
+    "Content-Type": "application/json"
+}
 
 @router.post("/clone")
-async def clone_voice(user_id: str = Form(...),
-    user_name: str = Form("Mirror User"), audio: UploadFile = File(...)):
+async def clone_voice(
+    user_id: str = Form(...),
+    user_name: str = Form("Mirror User"),
+    audio: UploadFile = File(...)
+):
     audio_bytes = await audio.read()
-    async with httpx.AsyncClient() as client:
-        response = await client.post(f"{EL_BASE}/voices/add",
-            headers={"xi-api-key": ELEVENLABS_API_KEY},
-            data={"name": f"Mirror-{user_name}"},
-            files={"files": (audio.filename, audio_bytes, audio.content_type)},
-            timeout=60.0)
+
+    suffix = os.path.splitext(audio.filename or "audio.webm")[1] or ".webm"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    try:
+        async with httpx.AsyncClient() as client:
+            with open(tmp_path, "rb") as f:
+                response = await client.post(
+                    f"{SMALLEST_BASE}/lightning-large/add_voice",
+                    headers={"Authorization": f"Bearer {SMALLEST_API_KEY}"},
+                    data={"displayName": f"Mirror-{user_name}"},
+                    files={"file": (audio.filename, f, audio.content_type)},
+                    timeout=60.0
+                )
+    finally:
+        os.unlink(tmp_path)
+
     if response.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"ElevenLabs error: {response.text}")
-    voice_id = response.json()["voice_id"]
+        raise HTTPException(status_code=500, detail=f"Smallest.ai error: {response.text}")
+
+    voice_id = response.json()["data"]["voiceId"]
+
     sb = get_supabase()
     sb.table("profiles").update({"voice_id": voice_id, "onboarding_step": 3})\
         .eq("id", user_id).execute()
+
     return {"voice_id": voice_id}
+
 
 @router.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
@@ -33,30 +56,43 @@ async def transcribe_audio(audio: UploadFile = File(...)):
 
     audio_bytes = await audio.read()
     suffix = os.path.splitext(audio.filename or "audio.webm")[1] or ".webm"
+
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(audio_bytes)
         tmp_path = tmp.name
+
     try:
         with open(tmp_path, "rb") as f:
             try:
                 transcript = await openai_client.audio.transcriptions.create(
-                    model="whisper-1", file=f, response_format="text")
+                    model="gpt-4o-mini-transcribe", file=f, response_format="text")
             except (APIConnectionError, APITimeoutError):
                 raise HTTPException(
                     status_code=503,
-                    detail="OpenAI is unreachable right now. Check backend network access and OPENAI_API_KEY.",
+                    detail="OpenAI is unreachable. Check network access and OPENAI_API_KEY.",
                 )
             except (AuthenticationError, BadRequestError) as exc:
                 raise HTTPException(status_code=502, detail=f"OpenAI transcription failed: {exc}")
     finally:
         os.unlink(tmp_path)
+
     return {"transcript": transcript}
 
+
 async def synthesize_sentence(sentence: str, voice_id: str) -> bytes:
-    payload = {"text": sentence, "model_id": "eleven_monolingual_v1",
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.85}}
+    payload = {
+        "text": sentence,
+        "voice_id": voice_id,
+        "sample_rate": 24000,
+        "add_wav_header": True
+    }
     async with httpx.AsyncClient() as client:
-        response = await client.post(f"{EL_BASE}/text-to-speech/{voice_id}",
-            headers=EL_HEADERS, json=payload, timeout=15.0)
-    if response.status_code != 200: return b""
+        response = await client.post(
+            f"{SMALLEST_BASE}/lightning/get_speech",
+            headers=SMALLEST_HEADERS,
+            json=payload,
+            timeout=15.0
+        )
+    if response.status_code != 200:
+        return b""
     return response.content
