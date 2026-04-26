@@ -15,39 +15,44 @@ async def upload_file(background_tasks: BackgroundTasks,
     file: UploadFile = File(...), user_id: str = Form(...),
     source: str = Form(...), user_name: str = Form("")):
     try:
-        uuid.UUID(user_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid user_id (must be UUID)")
+        try:
+            uuid.UUID(user_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid user_id (must be UUID)")
 
-    job_id = str(uuid.uuid4())
-    try:
-        content = await file.read()
-        file_text = content.decode("utf-8", errors="ignore")
+        job_id = str(uuid.uuid4())
+        try:
+            content = await file.read()
+            file_text = content.decode("utf-8", errors="ignore")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}") from exc
+
+        try:
+            sb = get_supabase()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Supabase client initialization failed: {exc}",
+            ) from exc
+
+        try:
+            sb.table("ingest_jobs").insert({"id": job_id, "user_id": user_id,
+                "source": source, "status": "processing"}).execute()
+        except APIError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Backend cannot write to Supabase ingest_jobs. "
+                    "Confirm SUPABASE_SERVICE_ROLE_KEY is set and grant table privileges in Supabase SQL Editor."
+                ),
+            ) from exc
+
+        background_tasks.add_task(run_ingestion, job_id, user_id, file_text, source, user_name)
+        return {"job_id": job_id, "status": "processing"}
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}") from exc
-
-    try:
-        sb = get_supabase()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Supabase client initialization failed: {exc}",
-        ) from exc
-
-    try:
-        sb.table("ingest_jobs").insert({"id": job_id, "user_id": user_id,
-            "source": source, "status": "processing"}).execute()
-    except APIError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Backend cannot write to Supabase ingest_jobs. "
-                "Confirm SUPABASE_SERVICE_ROLE_KEY is set and grant table privileges in Supabase SQL Editor."
-            ),
-        ) from exc
-
-    background_tasks.add_task(run_ingestion, job_id, user_id, file_text, source, user_name)
-    return {"job_id": job_id, "status": "processing"}
+        raise HTTPException(status_code=500, detail=f"Unhandled ingest upload error: {exc}") from exc
 
 
 async def run_ingestion(job_id, user_id, file_text, source, user_name):
