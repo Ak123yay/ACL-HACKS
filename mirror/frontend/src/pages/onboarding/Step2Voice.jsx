@@ -12,12 +12,46 @@ const SAMPLE_SCRIPT =
   'and to speak honestly about it. The version of me that handles things well is not far away. ' +
   'It is right here, right now, in this breath.'
 
+const getCloneErrorMessage = (err) => {
+  const status = err?.response?.status
+  const detail = err?.response?.data?.detail
+
+  if (status === 504 || /timed\s*out|timeout/i.test(String(detail || ''))) {
+    return 'Voice cloning timed out on the server. Please try again; this step can take up to a few minutes.'
+  }
+
+  if (status === 503) {
+    return 'Voice service is temporarily unavailable. Please try again in a minute.'
+  }
+
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail
+  }
+
+  return 'Voice cloning failed after recording. Please try again.'
+}
+
+const getRecordingErrorMessage = (err) => {
+  const name = err?.name
+
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Microphone access is blocked. Enable microphone permission for this site, then try again.'
+  }
+
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'No microphone was found. Connect a microphone and try again.'
+  }
+
+  return 'Could not start recording. Check your microphone and browser permissions, then try again.'
+}
+
 export default function Step2Voice() {
   const { user } = useAuth()
   const nav      = useNavigate()
 
   const [state,   setState]   = useState('idle')  // idle|recording|processing|done|error
   const [elapsed, setElapsed] = useState(0)
+  const [errorMessage, setErrorMessage] = useState('')
   const mrRef     = useRef(null)
   const chunksRef = useRef([])
   const timerRef  = useRef(null)
@@ -38,12 +72,16 @@ export default function Step2Voice() {
           await cloneVoice(blob, user.id)
           await supabase.from('profiles').update({ onboarding_step: 2 }).eq('id', user.id)
           setState('done')
-        } catch { setState('error') }
+        } catch (err) {
+          setErrorMessage(getCloneErrorMessage(err))
+          setState('error')
+        }
       }
 
       mr.start()
       mrRef.current = mr
       setState('recording')
+      setErrorMessage('')
       setElapsed(0)
 
       timerRef.current = setInterval(() => {
@@ -56,7 +94,8 @@ export default function Step2Voice() {
           return s + 1
         })
       }, 1000)
-    } catch {
+    } catch (err) {
+      setErrorMessage(getRecordingErrorMessage(err))
       setState('error')
     }
   }, [user])
@@ -158,9 +197,16 @@ export default function Step2Voice() {
         {state === 'error' && (
           <div>
             <p style={{ color: 'var(--danger)', fontSize: '0.83rem', marginBottom: 12 }}>
-              Something went wrong. Check your microphone permissions and try again.
+              {errorMessage || 'Something went wrong. Please try again.'}
             </p>
-            <button className="btn-ghost" onClick={() => setState('idle')} style={{ fontSize: '0.83rem' }}>
+            <button
+              className="btn-ghost"
+              onClick={() => {
+                setErrorMessage('')
+                setState('idle')
+              }}
+              style={{ fontSize: '0.83rem' }}
+            >
               Try again
             </button>
           </div>

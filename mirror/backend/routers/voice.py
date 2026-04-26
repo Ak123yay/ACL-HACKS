@@ -17,7 +17,12 @@ async def clone_voice(
     user_name: str = Form("Mirror User"),
     audio: UploadFile = File(...)
 ):
+    if not SMALLEST_API_KEY:
+        raise HTTPException(status_code=503, detail="SMALLEST_API_KEY is not configured on the backend.")
+
     audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded audio sample is empty.")
 
     suffix = os.path.splitext(audio.filename or "audio.webm")[1] or ".webm"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -27,24 +32,46 @@ async def clone_voice(
     try:
         async with httpx.AsyncClient() as client:
             with open(tmp_path, "rb") as f:
-                response = await client.post(
-                    f"{SMALLEST_BASE}/lightning-large/add_voice",
-                    headers={"Authorization": f"Bearer {SMALLEST_API_KEY}"},
-                    data={"displayName": f"Mirror-{user_name}"},
-                    files={"file": (audio.filename, f, audio.content_type)},
-                    timeout=60.0
-                )
+                try:
+                    response = await client.post(
+                        f"{SMALLEST_BASE}/lightning-large/add_voice",
+                        headers={"Authorization": f"Bearer {SMALLEST_API_KEY}"},
+                        data={"displayName": f"Mirror-{user_name}"},
+                        files={"file": (audio.filename, f, audio.content_type)},
+                        timeout=httpx.Timeout(180.0, connect=20.0, read=180.0, write=30.0),
+                    )
+                except httpx.TimeoutException:
+                    raise HTTPException(
+                        status_code=504,
+                        detail="Voice cloning timed out while waiting for the voice provider.",
+                    )
+                except httpx.RequestError as exc:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Voice provider request failed: {exc.__class__.__name__}",
+                    )
     finally:
         os.unlink(tmp_path)
 
     if response.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Smallest.ai error: {response.text}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Voice provider error ({response.status_code}): {response.text[:300]}",
+        )
 
-    voice_id = response.json()["data"]["voiceId"]
+    try:
+        voice_id = response.json()["data"]["voiceId"]
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(status_code=502, detail="Voice provider returned an invalid response.")
 
-    sb = get_supabase()
-    sb.table("profiles").update({"voice_id": voice_id, "onboarding_step": 3})\
-        .eq("id", user_id).execute()
+    try:
+        sb = get_supabase()
+        sb.table("profiles").update({"voice_id": voice_id, "onboarding_step": 3})\
+            .eq("id", user_id).execute()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Failed to persist voice clone in profile.")
 
     return {"voice_id": voice_id}
 
