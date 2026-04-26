@@ -1,15 +1,35 @@
 # backend/routers/ingest.py
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException
-from postgrest.exceptions import APIError
-from config import get_supabase
 from services.parsers import parse_file
 from services.chunker import chunk_messages
 from services.embedder import embed_batch
 from services.chroma_client import add_documents
 from models import ReflectionRequest
+from datetime import datetime, timezone
+from threading import Lock
 import uuid
 
 router = APIRouter()
+
+INGEST_JOBS = {}
+INGEST_JOBS_LOCK = Lock()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _set_job(job_id: str, fields: dict):
+    with INGEST_JOBS_LOCK:
+        existing = INGEST_JOBS.get(job_id, {})
+        existing.update(fields)
+        existing["updated_at"] = _now_iso()
+        INGEST_JOBS[job_id] = existing
+
+
+def _get_job(job_id: str):
+    with INGEST_JOBS_LOCK:
+        return INGEST_JOBS.get(job_id)
 
 @router.post("/upload")
 async def upload_file(background_tasks: BackgroundTasks,
@@ -28,25 +48,16 @@ async def upload_file(background_tasks: BackgroundTasks,
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}") from exc
 
-        try:
-            sb = get_supabase()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Supabase client initialization failed: {exc}",
-            ) from exc
-
-        try:
-            sb.table("ingest_jobs").insert({"id": job_id, "user_id": user_id,
-                "source": source, "status": "processing"}).execute()
-        except APIError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Backend cannot write to Supabase ingest_jobs. "
-                    "Confirm SUPABASE_SERVICE_ROLE_KEY is set and grant table privileges in Supabase SQL Editor."
-                ),
-            ) from exc
+        _set_job(job_id, {
+            "id": job_id,
+            "user_id": user_id,
+            "source": source,
+            "status": "processing",
+            "chunks_added": 0,
+            "error": None,
+            "created_at": _now_iso(),
+            "completed_at": None,
+        })
 
         background_tasks.add_task(run_ingestion, job_id, user_id, file_text, source, user_name)
         return {"job_id": job_id, "status": "processing"}
@@ -58,7 +69,6 @@ async def upload_file(background_tasks: BackgroundTasks,
 
 async def run_ingestion(job_id, user_id, file_text, source, user_name):
     try:
-        sb = get_supabase()
         messages = parse_file(file_text, source, user_name)
         if not messages:
             raise ValueError("No messages found in file")
@@ -66,76 +76,63 @@ async def run_ingestion(job_id, user_id, file_text, source, user_name):
         chunks = chunk_messages(messages)
         embeddings = await embed_batch(chunks)
 
-        rows = [
+        metadatas = [
             {
-                "content": chunk,
-                "metadata": {
-                    "user_id": user_id,
-                    "source": source,
-                    "weight": 2.0 if source == "reflection" else 1.0
-                }
+                "user_id": user_id,
+                "source": source,
+                "weight": 2.0 if source == "reflection" else 1.0,
             }
-            for chunk, embedding in zip(chunks, embeddings)
+            for _ in chunks
         ]
         add_documents(
-            documents=[row["content"] for row in rows],
+            documents=chunks,
             embeddings=embeddings,
-            metadatas=[row["metadata"] for row in rows],
+            metadatas=metadatas,
         )
 
-        sb.table("ingest_jobs").update({"status": "complete",
-            "chunks_added": len(chunks), "completed_at": "now()"}).eq("id", job_id).execute()
-        sb.table("profiles").update({"onboarding_step": 1}).eq("id", user_id).execute()
+        _set_job(job_id, {
+            "status": "complete",
+            "chunks_added": len(chunks),
+            "error": None,
+            "completed_at": _now_iso(),
+        })
 
     except Exception as e:
         import traceback
         print("INGEST ERROR:", e)
         traceback.print_exc()
-        try:
-            sb.table("ingest_jobs").update({
-                "status": "error",
-                "error": str(e)
-            }).eq("id", job_id).execute()
-        except Exception as update_exc:
-            print("INGEST STATUS UPDATE ERROR:", update_exc)
+        _set_job(job_id, {
+            "status": "error",
+            "error": str(e),
+            "completed_at": _now_iso(),
+        })
 
 
 @router.get("/status/{job_id}")
 async def ingest_status(job_id: str):
-    sb = get_supabase()
-    result = sb.table("ingest_jobs").select("*").eq("id", job_id).single().execute()
-    return result.data
+    job = _get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Ingest job not found")
+    return job
 
 
 @router.post("/questions")
 async def save_reflections(req: ReflectionRequest):
-    sb = get_supabase()
-    rows_db = [{"user_id": req.user_id,
-                "question_id": a.question_id,
-                "answer": a.answer} for a in req.answers]
-    sb.table("reflections").insert(rows_db).execute()
-
     from services.embedder import embed_batch
     texts = [a.answer for a in req.answers]
     embeddings = await embed_batch(texts)
 
-    rows = [
+    metadatas = [
         {
-            "content": text,
-            "metadata": {
-                "user_id": req.user_id,
-                "source": "reflection",
-                "weight": 2.0
-            }
+            "user_id": req.user_id,
+            "source": "reflection",
+            "weight": 2.0,
         }
-        for text, embedding in zip(texts, embeddings)
+        for _ in texts
     ]
     add_documents(
-        documents=[row["content"] for row in rows],
+        documents=texts,
         embeddings=embeddings,
-        metadatas=[row["metadata"] for row in rows],
+        metadatas=metadatas,
     )
-
-    sb.table("profiles").update({"onboarding_step": 2})\
-        .eq("id", req.user_id).execute()
-    return {"saved": True}
+    return {"saved": True, "chunks_added": len(texts)}
