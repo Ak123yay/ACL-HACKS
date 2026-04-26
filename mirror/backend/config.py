@@ -19,7 +19,11 @@ FRONTEND_URL       = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 # AI clients
 anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
-openai_client    = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+openai_client    = AsyncOpenAI(
+    api_key=OPENAI_API_KEY,
+    max_retries=2,
+    timeout=30.0,
+) if OPENAI_API_KEY else None
 
 
 def _jwt_role(jwt_key: str) -> str | None:

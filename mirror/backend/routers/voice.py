@@ -1,5 +1,6 @@
 # backend/routers/voice.py
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from openai import APIConnectionError, APITimeoutError, BadRequestError, AuthenticationError
 from config import openai_client, get_supabase, ELEVENLABS_API_KEY
 import httpx, tempfile, os
 
@@ -27,6 +28,9 @@ async def clone_voice(user_id: str = Form(...),
 
 @router.post("/transcribe")
 async def transcribe_audio(audio: UploadFile = File(...)):
+    if openai_client is None:
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured on the backend.")
+
     audio_bytes = await audio.read()
     suffix = os.path.splitext(audio.filename or "audio.webm")[1] or ".webm"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -34,8 +38,16 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         tmp_path = tmp.name
     try:
         with open(tmp_path, "rb") as f:
-            transcript = await openai_client.audio.transcriptions.create(
-                model="whisper-1", file=f, response_format="text")
+            try:
+                transcript = await openai_client.audio.transcriptions.create(
+                    model="whisper-1", file=f, response_format="text")
+            except (APIConnectionError, APITimeoutError):
+                raise HTTPException(
+                    status_code=503,
+                    detail="OpenAI is unreachable right now. Check backend network access and OPENAI_API_KEY.",
+                )
+            except (AuthenticationError, BadRequestError) as exc:
+                raise HTTPException(status_code=502, detail=f"OpenAI transcription failed: {exc}")
     finally:
         os.unlink(tmp_path)
     return {"transcript": transcript}
