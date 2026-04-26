@@ -6,5 +6,13 @@ if (!supabaseUrl || !supabaseAnon) {
 }
 export const supabase = createClient(
   supabaseUrl  || 'https://placeholder.supabase.co',
-  supabaseAnon || 'placeholder-anon-key'
+  supabaseAnon || 'placeholder-anon-key',
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storageKey: 'mirror-auth',
+    },
+  }
 )

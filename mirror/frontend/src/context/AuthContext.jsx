@@ -3,6 +3,11 @@ import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext(null)
 
+const getEmailRedirectTo = () => {
+  if (typeof window === 'undefined') return undefined
+  return `${window.location.origin}/auth`
+}
+
 export function AuthProvider({ children }) {
   const [user,    setUser]    = useState(null)
   const [profile, setProfile] = useState(null)
@@ -15,23 +20,59 @@ export function AuthProvider({ children }) {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      if (session?.user) fetchProfile(session.user.id).finally(() => setLoading(false))
-      else setLoading(false)
-    })
+    let active = true
+
+    const bootstrap = async () => {
+      try {
+        if (typeof window !== 'undefined') {
+          const url = new URL(window.location.href)
+          const authCode = url.searchParams.get('code')
+          if (authCode) {
+            await supabase.auth.exchangeCodeForSession(authCode)
+            url.searchParams.delete('code')
+            url.searchParams.delete('type')
+            window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`)
+          }
+        }
+
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!active) return
+
+        setUser(session?.user ?? null)
+        if (session?.user) {
+          await fetchProfile(session.user.id)
+        } else {
+          setProfile(null)
+        }
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+
+    bootstrap()
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!active) return
       setUser(session?.user ?? null)
       if (session?.user) await fetchProfile(session.user.id)
       else setProfile(null)
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   const signUp = (email, password, displayName) =>
-    supabase.auth.signUp({ email, password, options: { data: { display_name: displayName } } })
+    supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { display_name: displayName },
+        emailRedirectTo: getEmailRedirectTo(),
+      },
+    })
 
   const signIn = (email, password) =>
     supabase.auth.signInWithPassword({ email, password })

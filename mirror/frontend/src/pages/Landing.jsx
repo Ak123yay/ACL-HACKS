@@ -1,12 +1,9 @@
-import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
 export default function Landing() {
   const nav      = useNavigate()
-  const { user } = useAuth()
-
-  useEffect(() => { if (user) nav('/home') }, [user])
+  const { user, loading, signOut } = useAuth()
 
   const scrollToHow = () => document.getElementById('how')?.scrollIntoView({ behavior: 'smooth' })
 
@@ -26,12 +23,29 @@ export default function Landing() {
           Mirror
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn-ghost" onClick={() => nav('/auth?mode=login')} style={{ padding: '9px 20px' }}>
-            Sign in
-          </button>
-          <button className="btn-primary" onClick={() => nav('/auth?mode=signup')} style={{ padding: '9px 20px' }}>
-            Get started
-          </button>
+          {loading ? (
+            <button className="btn-ghost" disabled style={{ padding: '9px 20px', opacity: 0.7 }}>
+              Checking session...
+            </button>
+          ) : user ? (
+            <>
+              <button className="btn-ghost" onClick={() => nav('/home')} style={{ padding: '9px 20px' }}>
+                Go to Home
+              </button>
+              <button className="btn-primary" onClick={signOut} style={{ padding: '9px 20px' }}>
+                Sign out
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="btn-ghost" onClick={() => nav('/auth?mode=login')} style={{ padding: '9px 20px' }}>
+                Sign in
+              </button>
+              <button className="btn-primary" onClick={() => nav('/auth?mode=signup')} style={{ padding: '9px 20px' }}>
+                Get started
+              </button>
+            </>
+          )}
         </div>
       </nav>
 
@@ -74,13 +88,19 @@ export default function Landing() {
           then makes it available whenever you need your wisest self.
         </p>
 
+        {!loading && user && (
+          <p style={{ marginBottom: 26, fontSize: '0.85rem', color: 'var(--success)' }}>
+            Logged in as {user.email}
+          </p>
+        )}
+
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
           <button
             className="btn-primary"
-            onClick={() => nav('/auth?mode=signup')}
+            onClick={() => nav(user ? '/home' : '/auth?mode=signup')}
             style={{ padding: '14px 40px', fontSize: '1rem' }}
           >
-            Build your Mirror
+            {user ? 'Continue to Home' : 'Build your Mirror'}
           </button>
           <button
             className="btn-ghost"
@@ -221,10 +241,10 @@ export default function Landing() {
         </p>
         <button
           className="btn-primary"
-          onClick={() => nav('/auth?mode=signup')}
+          onClick={() => nav(user ? '/home' : '/auth?mode=signup')}
           style={{ padding: '15px 48px', fontSize: '1rem' }}
         >
-          Get started →
+          {user ? 'Continue →' : 'Get started →'}
         </button>
       </section>
 
