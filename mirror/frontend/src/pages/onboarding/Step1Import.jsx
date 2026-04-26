@@ -26,7 +26,7 @@ const SOURCES = [
 ]
 
 export default function Step1Import() {
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
   const nav      = useNavigate()
 
   const [uploaded, setUploaded] = useState({})   // { sourceId: { chunks, name } }
@@ -41,6 +41,7 @@ export default function Step1Import() {
     fd.append('file',    file)
     fd.append('source',  sourceId)
     fd.append('user_id', user.id)
+    fd.append('user_name', profile?.display_name || user?.email?.split('@')[0] || '')
 
     try {
       setProgress((p) => ({ ...p, [sourceId]: 5 }))
@@ -64,7 +65,12 @@ export default function Step1Import() {
             setError(`Failed to process ${file.name}: ${status.error || 'Unknown error'}`)
             setProgress((p) => ({ ...p, [sourceId]: 0 }))
           }
-        } catch { clearInterval(poll); setPolling((p) => ({ ...p, [sourceId]: false })) }
+        } catch {
+          clearInterval(poll)
+          setPolling((p) => ({ ...p, [sourceId]: false }))
+          setError('Could not verify upload status. Please try uploading again.')
+          setProgress((p) => ({ ...p, [sourceId]: 0 }))
+        }
       }, 2000)
     } catch (e) {
       setError(e.response?.data?.detail || 'Upload failed. Check your backend connection.')

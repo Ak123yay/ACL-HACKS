@@ -2,19 +2,32 @@
 import re, json
 from typing import List
 
-WHATSAPP_PATTERN = re.compile(
-    r"^\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2}(?:\s?[AP]M)?\s-\s(.+?):\s(.+)$"
+# Android-style export: 12/31/2025, 9:03 PM - Name: Message
+WHATSAPP_PATTERN_DASH = re.compile(
+    r"^\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?\s-\s(.+?):\s(.+)$"
+)
+
+# iOS-style export: [12/31/2025, 9:03:12 PM] Name: Message
+WHATSAPP_PATTERN_BRACKET = re.compile(
+    r"^\[\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?\]\s(.+?):\s(.+)$"
 )
 
 def parse_whatsapp(file_text: str, user_name: str) -> List[str]:
     messages = []
     for line in file_text.splitlines():
-        m = WHATSAPP_PATTERN.match(line.strip())
-        if not m: continue
+        line = line.strip()
+        m = WHATSAPP_PATTERN_DASH.match(line) or WHATSAPP_PATTERN_BRACKET.match(line)
+        if not m:
+            continue
+
         sender, text = m.group(1).strip(), m.group(2).strip()
-        if sender.lower() != user_name.lower(): continue
-        if text in ("<Media omitted>", "image omitted"): continue
-        if len(text) < 15: continue
+        # If a username was provided, only keep the user's own messages.
+        if user_name and sender.lower() != user_name.lower():
+            continue
+        if text in ("<Media omitted>", "image omitted"):
+            continue
+        if len(text) < 15:
+            continue
         messages.append(text)
     return messages
 
