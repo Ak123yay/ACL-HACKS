@@ -2,6 +2,15 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext(null)
+const SESSION_TIMEOUT_MS = 8000
+
+const withTimeout = (promise, timeoutMs) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Session check timed out')), timeoutMs)
+    }),
+  ])
 
 const getEmailRedirectTo = () => {
   if (typeof window === 'undefined') return undefined
@@ -14,7 +23,12 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   const fetchProfile = async (userId) => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    if (error) {
+      console.warn('[Mirror] Unable to fetch profile:', error.message)
+      setProfile(null)
+      return null
+    }
     setProfile(data)
     return data
   }
@@ -28,14 +42,14 @@ export function AuthProvider({ children }) {
           const url = new URL(window.location.href)
           const authCode = url.searchParams.get('code')
           if (authCode) {
-            await supabase.auth.exchangeCodeForSession(authCode)
+            await withTimeout(supabase.auth.exchangeCodeForSession(authCode), SESSION_TIMEOUT_MS)
             url.searchParams.delete('code')
             url.searchParams.delete('type')
             window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`)
           }
         }
 
-        const { data: { session } } = await supabase.auth.getSession()
+        const { data: { session } } = await withTimeout(supabase.auth.getSession(), SESSION_TIMEOUT_MS)
         if (!active) return
 
         setUser(session?.user ?? null)
@@ -44,6 +58,11 @@ export function AuthProvider({ children }) {
         } else {
           setProfile(null)
         }
+      } catch (error) {
+        if (!active) return
+        console.warn('[Mirror] Session bootstrap failed:', error?.message || error)
+        setUser(null)
+        setProfile(null)
       } finally {
         if (active) setLoading(false)
       }
@@ -54,8 +73,13 @@ export function AuthProvider({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!active) return
       setUser(session?.user ?? null)
-      if (session?.user) await fetchProfile(session.user.id)
-      else setProfile(null)
+      try {
+        if (session?.user) await fetchProfile(session.user.id)
+        else setProfile(null)
+      } catch (error) {
+        console.warn('[Mirror] Auth state update failed:', error?.message || error)
+        setProfile(null)
+      }
     })
 
     return () => {
