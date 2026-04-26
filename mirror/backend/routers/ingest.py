@@ -1,11 +1,11 @@
 # backend/routers/ingest.py
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException
+from postgrest.exceptions import APIError
 from config import get_supabase
 from services.parsers import parse_file
 from services.chunker import chunk_messages
 from services.embedder import embed_batch
 from services.chroma_client import get_collection
-from models import ReflectionRequest
 import uuid
 
 router = APIRouter()
@@ -14,12 +14,27 @@ router = APIRouter()
 async def upload_file(background_tasks: BackgroundTasks,
     file: UploadFile = File(...), user_id: str = Form(...),
     source: str = Form(...), user_name: str = Form("")):
+    try:
+        uuid.UUID(user_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid user_id (must be UUID)")
+
     job_id = str(uuid.uuid4())
     content = await file.read()
     file_text = content.decode("utf-8", errors="ignore")
     sb = get_supabase()
-    sb.table("ingest_jobs").insert({"id": job_id, "user_id": user_id,
-        "source": source, "status": "processing"}).execute()
+    try:
+        sb.table("ingest_jobs").insert({"id": job_id, "user_id": user_id,
+            "source": source, "status": "processing"}).execute()
+    except APIError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Backend cannot write to Supabase ingest_jobs. "
+                "Confirm SUPABASE_SERVICE_ROLE_KEY is set and grant table privileges in Supabase SQL Editor."
+            ),
+        ) from exc
+
     background_tasks.add_task(run_ingestion, job_id, user_id, file_text, source, user_name)
     return {"job_id": job_id, "status": "processing"}
 
@@ -43,14 +58,13 @@ async def run_ingestion(job_id, user_id, file_text, source, user_name):
         print("INGEST ERROR:", e)
         traceback.print_exc()
 
-        sb.table("ingest_jobs").update({
-            "status": "error",
-            "error": str(e)
-        }).eq("id", job_id).execute()
-    try:
-        uuid.UUID(user_id)
-    except:
-        raise ValueError("Invalid user_id (must be UUID)")
+        try:
+            sb.table("ingest_jobs").update({
+                "status": "error",
+                "error": str(e)
+            }).eq("id", job_id).execute()
+        except Exception as update_exc:
+            print("INGEST STATUS UPDATE ERROR:", update_exc)
 
 @router.get("/status/{job_id}")
 async def ingest_status(job_id: str):

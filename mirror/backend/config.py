@@ -33,9 +33,18 @@ def _jwt_role(jwt_key: str) -> str | None:
 
 
 def _get_backend_supabase_key() -> str:
-    key = SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY
+    key = SUPABASE_SERVICE_ROLE_KEY
     if not SUPABASE_URL or not key:
         raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in backend environment")
+
+    # Supabase now issues secret keys with an sb_secret_ prefix.
+    if key.startswith("sb_secret_"):
+        return key
+    if key.startswith("sb_publishable_"):
+        raise RuntimeError(
+            "Backend requires a Supabase service role key. "
+            "Set SUPABASE_SERVICE_ROLE_KEY to a secret/service key, not a publishable key."
+        )
 
     role = _jwt_role(key)
     if role != "service_role":
