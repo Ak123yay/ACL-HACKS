@@ -55,6 +55,7 @@ def _get_backend_supabase_key() -> str:
         )
 
     role = _jwt_role(key)
+    print("DECODED ROLE:", role)
     if role != "service_role":
         raise RuntimeError(
             "Backend requires a Supabase service role key. "
