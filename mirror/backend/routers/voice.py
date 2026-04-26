@@ -1,3 +1,24 @@
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+import httpx
+from config import get_supabase
+
+
+router = APIRouter()
+
+
+import os
+
+
+SMALLEST_API_KEY = os.getenv("SMALLEST_API_KEY")
+SMALLEST_BASE = os.getenv("SMALLEST_BASE", "https://waves-api.smallest.ai/api/v1")
+
+
+SMALLEST_HEADERS = {
+    "Authorization": f"Bearer {SMALLEST_API_KEY}",
+    "Content-Type": "application/json",
+}
+
+
 @router.post("/clone")
 async def clone_voice(
     user_id: str = Form(...),
@@ -27,3 +48,6 @@ async def synthesize_sentence(sentence: str, voice_id: str) -> bytes:
     if response.status_code != 200:
         return b""
     return response.content
+
+
+
